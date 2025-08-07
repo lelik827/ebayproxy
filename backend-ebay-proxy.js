@@ -6,70 +6,65 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const EBAY_APP_ID = process.env.EBAY_APP_ID;
-const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN;
+const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN; // For deletion webhook if used
 
 app.use(cors());
-app.use(express.json()); // Parses JSON body
+app.use(express.json());
 
-// === eBay Card Search Proxy ===
 app.get('/api/search', async (req, res) => {
-    const { keyword } = req.query;
-    if (!keyword) {
-        return res.status(400).json({ error: 'Missing keyword parameter' });
+  const { keyword, soldOnly = 'true' } = req.query;
+
+  if (!keyword) {
+    return res.status(400).json({ error: 'Missing keyword parameter' });
+  }
+
+  // Choose eBay API endpoint (production)
+  const baseUrl = 'https://svcs.ebay.com/services/search/FindingService/v1';
+
+  // Build itemFilter string based on soldOnly param
+  const soldFilter = soldOnly === 'true'
+    ? '&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true'
+    : '';
+
+  const url = `${baseUrl}?OPERATION-NAME=findCompletedItems` +
+              `&SERVICE-VERSION=1.13.0` +
+              `&SECURITY-APPNAME=${EBAY_APP_ID}` +
+              `&RESPONSE-DATA-FORMAT=JSON` +
+              `&REST-PAYLOAD` +
+              `&keywords=${encodeURIComponent(keyword)}` +
+              `${soldFilter}` +
+              `&paginationInput.entriesPerPage=5`;
+
+  console.log(`🛠️  Fetching eBay API with URL:\n${url}`);
+
+  try {
+    const response = await fetch(url);
+    console.log(`🔔 eBay API responded with status: ${response.status}`);
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`❌ eBay API error response body:\n${text}`);
+      return res.status(response.status).json({ error: 'eBay API returned an error', details: text });
     }
 
-    const url = `https://svcs.sandbox.ebay.com/services/search/FindingService/v1?OPERATION-NAME=findCompletedItems&SERVICE-VERSION=1.0.0&SECURITY-APPNAME=${EBAY_APP_ID}&RESPONSE-DATA-FORMAT=JSON&REST-PAYLOAD&keywords=${encodeURIComponent(keyword)}&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true&paginationInput.entriesPerPage=5`;
+    const data = await response.json();
+    console.log('📦 eBay API response JSON:', JSON.stringify(data, null, 2));
 
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-        res.json(data);
-    } catch (err) {
-        res.status(500).json({ error: 'eBay API error', details: err.message });
+    // Basic validation of response format
+    if (!data.findCompletedItemsResponse) {
+      return res.status(500).json({ error: 'Unexpected eBay API response format' });
     }
+
+    res.json(data);
+
+  } catch (err) {
+    console.error('🔥 Error fetching from eBay API:', err);
+    res.status(500).json({ error: 'Internal server error', details: err.message });
+  }
 });
 
-// === eBay Endpoint Validation (GET) with debug logs ===
-app.get('/user-data-deletion', (req, res) => {
-    const challengeCode = req.query.challengeCode;
-    console.log(`Received challengeCode: ${challengeCode}`);
-
-    if (!challengeCode) {
-        console.warn('Missing challengeCode parameter in GET /user-data-deletion');
-        return res.status(400).json({ error: 'Missing challengeCode parameter' });
-    }
-
-    console.log(`Responding with challengeResponse: ${challengeCode}`);
-
-    res.status(200).json({ challengeResponse: challengeCode });
-});
-
-// === eBay Account Deletion Notification (POST) ===
-app.post('/user-data-deletion', (req, res) => {
-    const authHeader = req.headers['x-ebay-verification-token'];
-
-    if (!authHeader || authHeader !== EBAY_VERIFICATION_TOKEN) {
-        console.warn('❌ Invalid or missing eBay verification token');
-        return res.status(403).json({ error: 'Forbidden: invalid token' });
-    }
-
-    const { eventType, userId, username } = req.body;
-
-    if (eventType !== 'ACCOUNT_DELETION') {
-        return res.status(400).json({ error: 'Unsupported event type' });
-    }
-
-    console.log(`✅ Verified deletion request for userId: ${userId}, username: ${username}`);
-    deleteUserData(userId);
-
-    res.status(200).json({ status: 'User data deleted' });
-});
-
-function deleteUserData(userId) {
-    console.log(`🧹 Deleting user data for userId: ${userId}...`);
-    // TODO: Implement actual deletion logic
-}
+// Your user-data-deletion endpoint here if needed...
 
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
