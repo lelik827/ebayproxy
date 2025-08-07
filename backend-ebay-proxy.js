@@ -1,126 +1,125 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>eBay Card Sales Lookup</title>
-<!-- Tailwind CSS CDN -->
-<link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
-<!-- SheetJS for spreadsheet parsing -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-</head>
-<body class="bg-gray-100 flex items-center justify-center min-h-screen">
-  <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-2xl">
-    <h1 class="text-2xl font-bold mb-4 text-center">eBay Card Sales Lookup</h1>
-    <p class="mb-4 text-center">Upload a CSV or Excel file with a 'CardName' or 'Name' column</p>
-    <input type="file" id="spreadsheetInput" accept=".csv,.xlsx,.xls" class="mb-4 w-full p-2 border rounded" />
-    <button id="searchButton" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600">Search eBay</button>
-    <div id="results" class="mt-4"></div>
-  </div>
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
+import dotenv from 'dotenv';
+import querystring from 'querystring';
+import rateLimit from 'express-rate-limit';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-<script>
-  const spreadsheetInput = document.getElementById('spreadsheetInput');
-  const searchButton = document.getElementById('searchButton');
-  const resultsDiv = document.getElementById('results');
+dotenv.config();
 
-  // Parse uploaded spreadsheet for card names
-  function parseSpreadsheet(file) {
-    return new Promise((resolve, reject) => {
-      console.log('Reading file:', file.name);
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = new Uint8Array(e.target.result);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheetName = workbook.SheetNames[0];
-          const sheet = workbook.Sheets[sheetName];
-          const json = XLSX.utils.sheet_to_json(sheet);
-          const cardNames = json.map(row => row.CardName || row.Name).filter(Boolean);
-          if (cardNames.length === 0) {
-            throw new Error('No valid card names found. Ensure "CardName" or "Name" column exists.');
-          }
-          resolve(cardNames);
-        } catch (error) {
-          console.error('Spreadsheet parsing error:', error);
-          reject(error);
-        }
-      };
-      reader.onerror = () => {
-        console.error('FileReader error');
-        reject(new Error('Failed to read file'));
-      };
-      reader.readAsArrayBuffer(file);
-    });
-  }
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-  // Query backend proxy for eBay sold items data
-  async function searchEbay(cardName) {
-    const url = `https://ebayproxy.onrender.com/api/search?keyword=${encodeURIComponent(cardName)}`;
-    try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-      const data = await response.json();
-      const items = data.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
-      return items;
-    } catch (error) {
-      console.error(`eBay API error for "${cardName}":`, error);
-      return [];
-    }
-  }
+// For __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-  // Display results in the page
-  function displayResults(cardResults) {
-    resultsDiv.innerHTML = '';
-    if (cardResults.length === 0) {
-      resultsDiv.innerHTML = '<p class="text-red-500">No cards processed.</p>';
-      return;
-    }
-    cardResults.forEach(({ cardName, items }) => {
-      const cardDiv = document.createElement('div');
-      cardDiv.className = 'border p-4 mb-4 rounded';
-      cardDiv.innerHTML = `<h2 class="text-lg font-semibold mb-2">${cardName}</h2>`;
+const {
+  EBAY_CLIENT_ID,
+  EBAY_CLIENT_SECRET,
+  EBAY_REDIRECT_URI,
+} = process.env;
 
-      if (items.length === 0) {
-        cardDiv.innerHTML += '<p class="text-red-500">No sold items found.</p>';
-      } else {
-        items.forEach(item => {
-          const itemDiv = document.createElement('div');
-          itemDiv.className = 'border-t pt-2 mt-2';
-          itemDiv.innerHTML = `
-            <p><strong>Title:</strong> ${item.title}</p>
-            <p><strong>Price:</strong> ${item.sellingStatus[0].currentPrice[0].__value__} ${item.sellingStatus[0].currentPrice[0]['@currencyId']}</p>
-            <p><strong>Sold Date:</strong> ${new Date(item.sellingStatus[0].timeOfSale || item.listingInfo[0].endTime).toLocaleDateString()}</p>
-            <a href="${item.viewItemURL}" target="_blank" class="text-blue-500 hover:underline">View on eBay</a>
-          `;
-          cardDiv.appendChild(itemDiv);
-        });
-      }
+app.use(cors());
+app.use(express.json());
 
-      resultsDiv.appendChild(cardDiv);
-    });
-  }
+// Serve static frontend files from 'public' folder
+app.use(express.static(path.join(__dirname, 'public')));
 
-  // Handle button click to parse file and search eBay
-  searchButton.addEventListener('click', async () => {
-    const file = spreadsheetInput.files[0];
-    if (!file) {
-      resultsDiv.innerHTML = '<p class="text-red-500">Please upload a spreadsheet.</p>';
-      return;
-    }
-    resultsDiv.innerHTML = '<p>Loading...</p>';
-    try {
-      const cardNames = await parseSpreadsheet(file);
-      const cardResults = [];
-      for (const cardName of cardNames) {
-        const items = await searchEbay(cardName);
-        cardResults.push({ cardName, items });
-      }
-      displayResults(cardResults);
-    } catch (error) {
-      console.error('Error:', error);
-      resultsDiv.innerHTML = `<p class="text-red-500">Error: ${error.message}</p>`;
-    }
+// Rate limiting middleware (1 request per 5 seconds)
+const searchLimiter = rateLimit({
+  windowMs: 5000,
+  max: 1,
+  message: 'Too many requests, please wait 5 seconds',
+});
+
+// OAuth routes (same as before)
+app.get('/auth/login', (req, res) => {
+  const scope = 'https://api.ebay.com/oauth/api_scope';
+  const query = querystring.stringify({
+    client_id: EBAY_CLIENT_ID,
+    response_type: 'code',
+    redirect_uri: EBAY_REDIRECT_URI,
+    scope,
   });
-</script>
-</body>
-</html>
+  const ebayAuthUrl = `https://auth.ebay.com/oauth2/authorize?${query}`;
+  res.redirect(ebayAuthUrl);
+});
+
+app.get('/auth/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) {
+    return res.status(400).send('Missing auth code');
+  }
+
+  const tokenUrl = 'https://api.ebay.com/identity/v1/oauth2/token';
+  const basicAuth = Buffer.from(`${EBAY_CLIENT_ID}:${EBAY_CLIENT_SECRET}`).toString('base64');
+  const tokenParams = querystring.stringify({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: EBAY_REDIRECT_URI,
+  });
+
+  try {
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: tokenParams,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Token exchange failed:', errorText);
+      return res.status(500).send(`Token exchange failed:\n${errorText}`);
+    }
+
+    const tokenData = await response.json();
+    console.log('🔑 Access Token:', tokenData.access_token);
+    res.send('✅ eBay OAuth completed successfully! You can close this window.');
+  } catch (err) {
+    console.error('❌ OAuth error:', err);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// eBay search API proxy
+app.get('/api/search', searchLimiter, async (req, res) => {
+  const { keyword } = req.query;
+  if (!keyword) {
+    return res.status(400).json({ error: 'Missing keyword parameter' });
+  }
+
+  const searchUrl = `https://svcs.ebay.com/services/search/FindingService/v1` +
+    `?OPERATION-NAME=findCompletedItems` +
+    `&SERVICE-VERSION=1.0.0` +
+    `&SECURITY-APPNAME=${EBAY_CLIENT_ID}` +
+    `&RESPONSE-DATA-FORMAT=JSON` +
+    `&REST-PAYLOAD` +
+    `&keywords=${encodeURIComponent(keyword)}` +
+    `&itemFilter(0).name=SoldItemsOnly` +
+    `&itemFilter(0).value=true` +
+    `&paginationInput.entriesPerPage=5`;
+
+  try {
+    const response = await fetch(searchUrl);
+    const data = await response.json();
+
+    if (data.errorMessage) {
+      console.error('❌ eBay API error:', JSON.stringify(data, null, 2));
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('❌ Search error:', err);
+    res.status(500).json({ error: 'eBay API error', details: err.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running at http://localhost:${PORT}`);
+});
