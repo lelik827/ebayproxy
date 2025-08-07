@@ -29,21 +29,22 @@ app.get('/api/search', async (req, res) => {
     }
 });
 
-// === eBay Endpoint Validation ===
+// === eBay Endpoint Validation (GET) with debug logs ===
 app.get('/user-data-deletion', (req, res) => {
     const challengeCode = req.query.challengeCode;
+    console.log(`Received challengeCode: ${challengeCode}`);
 
     if (!challengeCode) {
+        console.warn('Missing challengeCode parameter in GET /user-data-deletion');
         return res.status(400).json({ error: 'Missing challengeCode parameter' });
     }
 
-    console.log('🔐 Responding to eBay challengeCode verification...');
-    res.status(200).json({
-        challengeResponse: challengeCode
-    });
+    console.log(`Responding with challengeResponse: ${challengeCode}`);
+
+    res.status(200).json({ challengeResponse: challengeCode });
 });
 
-// === eBay Account Deletion Notification ===
+// === eBay Account Deletion Notification (POST) ===
 app.post('/user-data-deletion', (req, res) => {
     const authHeader = req.headers['x-ebay-verification-token'];
 
