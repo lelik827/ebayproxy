@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const EBAY_APP_ID = process.env.EBAY_APP_ID;
-const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN; // Add this to Render env vars
+const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN;
 
 app.use(cors());
 app.use(express.json()); // Parses JSON body
@@ -27,6 +27,20 @@ app.get('/api/search', async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: 'eBay API error', details: err.message });
     }
+});
+
+// === eBay Endpoint Validation ===
+app.get('/user-data-deletion', (req, res) => {
+    const challengeCode = req.query.challengeCode;
+
+    if (!challengeCode) {
+        return res.status(400).json({ error: 'Missing challengeCode parameter' });
+    }
+
+    console.log('🔐 Responding to eBay challengeCode verification...');
+    res.status(200).json({
+        challengeResponse: challengeCode
+    });
 });
 
 // === eBay Account Deletion Notification ===
