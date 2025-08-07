@@ -4,10 +4,12 @@ import cors from 'cors';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 const EBAY_APP_ID = process.env.EBAY_APP_ID;
+const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN; // Add this to Render env vars
 
 app.use(cors());
-app.use(express.json()); // Allows parsing of JSON bodies in POST requests
+app.use(express.json()); // Parses JSON body
 
 // === eBay Card Search Proxy ===
 app.get('/api/search', async (req, res) => {
@@ -29,24 +31,28 @@ app.get('/api/search', async (req, res) => {
 
 // === eBay Account Deletion Notification ===
 app.post('/user-data-deletion', (req, res) => {
+    const authHeader = req.headers['x-ebay-verification-token'];
+
+    if (!authHeader || authHeader !== EBAY_VERIFICATION_TOKEN) {
+        console.warn('❌ Invalid or missing eBay verification token');
+        return res.status(403).json({ error: 'Forbidden: invalid token' });
+    }
+
     const { eventType, userId, username } = req.body;
 
     if (eventType !== 'ACCOUNT_DELETION') {
         return res.status(400).json({ error: 'Unsupported event type' });
     }
 
-    console.log(`🗑️ Received deletion request for userId: ${userId}, username: ${username}`);
-
-    // TODO: Replace this with actual logic to delete or anonymize user data
+    console.log(`✅ Verified deletion request for userId: ${userId}, username: ${username}`);
     deleteUserData(userId);
 
     res.status(200).json({ status: 'User data deleted' });
 });
 
-// === Dummy function to simulate deletion ===
 function deleteUserData(userId) {
-    console.log(`🚨 Deleting user data for userId: ${userId}...`);
-    // Implement your data deletion logic here (e.g., database cleanup)
+    console.log(`🧹 Deleting user data for userId: ${userId}...`);
+    // TODO: Implement actual deletion logic
 }
 
 app.listen(PORT, () => {
