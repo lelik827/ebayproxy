@@ -1,0 +1,184 @@
+<script type="text/javascript">
+    var gk_isXlsx = false;
+    var gk_xlsxFileLookup = {};
+    var gk_fileData = {};
+    function filledCell(cell) {
+        return cell !== '' && cell != null;
+    }
+    function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], {type: 'base64'});
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, {header: 1, blankrows: false, defval: ''});
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                    row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                    headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, {header: 1});
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+    }
+</script>```html
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eBay Card Sales Lookup</title>
+    <!-- Pre-built Tailwind CSS from CDN -->
+    <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <!-- SheetJS for spreadsheet parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-2xl">
+        <h1 class="text-2xl font-bold mb-4 text-center">eBay Card Sales Lookup</h1>
+        <p class="mb-4 text-center">Upload a CSV or Excel file with a 'CardName' or 'Name' column</p>
+        <input type="file" id="spreadsheetInput" accept=".csv,.xlsx,.xls" class="mb-4 w-full p-2 border rounded">
+        <button id="searchButton" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600">Search
+            eBay</button>
+        <div id="results" class="mt-4"></div>
+    </div>
+
+    <script>
+        const EBAY_APP_ID = 'AlekseyC-CardPric-SBX-2810ac181-68c79a28'; // Your eBay Sandbox AppID
+        const spreadsheetInput = document.getElementById('spreadsheetInput');
+        const searchButton = document.getElementById('searchButton');
+        const resultsDiv = document.getElementById('results');
+
+        // Parse spreadsheet client-side
+        function parseSpreadsheet(file) {
+            return new Promise((resolve, reject) => {
+                console.log('Reading file:', file.name);
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        console.log('File read successfully, parsing with SheetJS');
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, {type: 'array'});
+                        const sheetName = workbook.SheetNames[0];
+                        console.log('Sheet name:', sheetName);
+                        const sheet = workbook.Sheets[sheetName];
+                        const json = XLSX.utils.sheet_to_json(sheet);
+                        console.log('Parsed data:', json);
+                        const cardNames = json.map(row => row.CardName || row.Name).filter(Boolean);
+                        if (cardNames.length === 0) {
+                            throw new Error('No valid card names found in spreadsheet. Ensure it has a "CardName" or "Name" column.');
+                        }
+                        console.log('Card names:', cardNames);
+                        resolve(cardNames);
+                    } catch (error) {
+                        console.error('Spreadsheet parsing error:', error);
+                        reject(error);
+                    }
+                };
+                reader.onerror = () => {
+                    console.error('FileReader error');
+                    reject(new Error('Failed to read file'));
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        // Search eBay for sold items
+        async function searchEbay(cardName) {
+            const url = `https://ebayproxy.onrender.com/api/search?keyword=${encodeURIComponent(cardName)}`;
+
+
+            try {
+                console.log(`Fetching eBay data for: ${cardName}`);
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                const data = await response.json();
+                const items = data.findCompletedItemsResponse[0].searchResult[0].item || [];
+                console.log(`eBay results for ${cardName}:`, items);
+                return items;
+            } catch (error) {
+                console.error(`eBay API error for ${cardName}:`, error);
+                return [];
+            }
+        }
+
+        // Display results
+        function displayResults(cardResults) {
+            resultsDiv.innerHTML = '';
+            if (cardResults.length === 0) {
+                resultsDiv.innerHTML = '<p class="text-red-500">No cards processed.</p>';
+                return;
+            }
+            cardResults.forEach(({cardName, items}) => {
+                const cardDiv = document.createElement('div');
+                cardDiv.className = 'border p-4 mb-4 rounded';
+                cardDiv.innerHTML = `<h2 class="text-lg font-semibold mb-2">${cardName}</h2>`;
+
+                if (items.length === 0) {
+                    cardDiv.innerHTML += '<p class="text-red-500">No sold items found.</p>';
+                } else {
+                    items.forEach(item => {
+                        const itemDiv = document.createElement('div');
+                        itemDiv.className = 'border-t pt-2 mt-2';
+                        itemDiv.innerHTML = `
+                            <p><strong>Title:</strong> ${item.title}</p>
+                            <p><strong>Price:</strong> ${item.sellingStatus[0].currentPrice[0].__value__} ${item.sellingStatus[0].currentPrice[0]['@currencyId']}</p>
+                            <p><strong>Sold Date:</strong> ${new Date(item.sellingStatus[0].timeOfSale || item.listingInfo[0].endTime).toLocaleDateString()}</p>
+                            <a href="${item.viewItemURL}" target="_blank" class="text-blue-500 hover:underline">View on eBay</a>
+                        `;
+                        cardDiv.appendChild(itemDiv);
+                    });
+                }
+                resultsDiv.appendChild(cardDiv);
+            });
+        }
+
+        // Handle search button click
+        searchButton.addEventListener('click', async () => {
+            const file = spreadsheetInput.files[0];
+            if (!file) {
+                resultsDiv.innerHTML = '<p class="text-red-500">Please upload a spreadsheet.</p>';
+                console.error('No file selected');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<p>Loading...</p>';
+
+            try {
+                const cardNames = await parseSpreadsheet(file);
+                const cardResults = [];
+                for (const cardName of cardNames) {
+                    const items = await searchEbay(cardName);
+                    cardResults.push({cardName, items});
+                }
+                displayResults(cardResults);
+            } catch (error) {
+                console.error('Error processing spreadsheet or fetching eBay data:', error);
+                resultsDiv.innerHTML = `<p class="text-red-500">Error: ${error.message}</p>`;
+            }
+        });
+    </script>
+</body>
+
+</html>
+```
