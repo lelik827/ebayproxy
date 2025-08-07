@@ -6,10 +6,44 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const EBAY_APP_ID = process.env.EBAY_APP_ID;
-const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN; // For deletion webhook if used
+const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN;
 
 app.use(cors());
 app.use(express.json());
+
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
+const cache = new Map(); // key: keyword+soldOnly, value: { timestamp, data }
+
+async function fetchEbayData(url, retries = 3, backoff = 1000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url);
+      const text = await response.text();
+
+      if (!response.ok) {
+        if (response.status === 500 && text.includes('RateLimiter')) {
+          console.warn(`⚠️ Rate limit hit on attempt ${attempt}, backing off ${backoff}ms...`);
+          if (attempt === retries) {
+            throw new Error('Rate limit exceeded, max retries reached');
+          }
+          await new Promise(r => setTimeout(r, backoff));
+          backoff *= 2;
+          continue;
+        }
+        throw new Error(`eBay API error: ${response.status} - ${text}`);
+      }
+
+      return JSON.parse(text);
+    } catch (err) {
+      if (attempt === retries) {
+        throw err;
+      }
+      console.warn(`⚠️ Fetch error on attempt ${attempt}, retrying:`, err.message);
+      await new Promise(r => setTimeout(r, backoff));
+      backoff *= 2;
+    }
+  }
+}
 
 app.get('/api/search', async (req, res) => {
   const { keyword, soldOnly = 'true' } = req.query;
@@ -18,10 +52,10 @@ app.get('/api/search', async (req, res) => {
     return res.status(400).json({ error: 'Missing keyword parameter' });
   }
 
-  // Choose eBay API endpoint (production)
-  const baseUrl = 'https://svcs.ebay.com/services/search/FindingService/v1';
+  const baseUrl = EBAY_APP_ID.includes('-SBX-')
+    ? 'https://svcs.sandbox.ebay.com/services/search/FindingService/v1'
+    : 'https://svcs.ebay.com/services/search/FindingService/v1';
 
-  // Build itemFilter string based on soldOnly param
   const soldFilter = soldOnly === 'true'
     ? '&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true'
     : '';
@@ -35,35 +69,31 @@ app.get('/api/search', async (req, res) => {
               `${soldFilter}` +
               `&paginationInput.entriesPerPage=5`;
 
-  console.log(`🛠️  Fetching eBay API with URL:\n${url}`);
+  const cacheKey = `${keyword}-${soldOnly}`;
+  const cached = cache.get(cacheKey);
+
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    console.log(`♻️ Returning cached data for "${keyword}" (soldOnly=${soldOnly})`);
+    return res.json(cached.data);
+  }
+
+  console.log(`🛠️ Fetching eBay API with URL:\n${url}`);
 
   try {
-    const response = await fetch(url);
-    console.log(`🔔 eBay API responded with status: ${response.status}`);
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(`❌ eBay API error response body:\n${text}`);
-      return res.status(response.status).json({ error: 'eBay API returned an error', details: text });
-    }
-
-    const data = await response.json();
-    console.log('📦 eBay API response JSON:', JSON.stringify(data, null, 2));
-
-    // Basic validation of response format
-    if (!data.findCompletedItemsResponse) {
-      return res.status(500).json({ error: 'Unexpected eBay API response format' });
-    }
-
+    const data = await fetchEbayData(url);
+    cache.set(cacheKey, { timestamp: Date.now(), data });
     res.json(data);
-
   } catch (err) {
-    console.error('🔥 Error fetching from eBay API:', err);
-    res.status(500).json({ error: 'Internal server error', details: err.message });
+    console.error('🔥 Error fetching from eBay API:', err.message);
+    if (err.message.includes('Rate limit')) {
+      res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
+    } else {
+      res.status(500).json({ error: 'Internal server error', details: err.message });
+    }
   }
 });
 
-// Your user-data-deletion endpoint here if needed...
+// (Include your user-data-deletion endpoint here if needed...)
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
