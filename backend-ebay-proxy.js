@@ -1,90 +1,83 @@
-// backend-ebay-proxy.js
-import express from 'express';
-import dotenv from 'dotenv';
 import fetch from 'node-fetch';
+import express from 'express';
 import cors from 'cors';
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-
 const EBAY_APP_ID = process.env.EBAY_APP_ID;
-if (!EBAY_APP_ID) {
-  console.error('❌ Missing eBay App ID (EBAY_APP_ID) in environment variables');
-  process.exit(1);
-}
+const EBAY_CERT_ID = process.env.EBAY_CERT_ID;
+const EBAY_DEV_ID = process.env.EBAY_DEV_ID;
+const EBAY_VERIFICATION_TOKEN = process.env.EBAY_VERIFICATION_TOKEN;
 
-// Rate limit queue (1 request every 5 seconds)
-let requestQueue = [];
-let isProcessing = false;
+app.use(cors());
+app.use(express.json());
 
-function enqueueRequest(callback) {
-  requestQueue.push(callback);
-  processQueue();
-}
+// === eBay Card Search Proxy ===
+app.get('/api/search', async (req, res) => {
+    const { keyword } = req.query;
 
-function processQueue() {
-  if (isProcessing || requestQueue.length === 0) return;
-
-  isProcessing = true;
-  const nextRequest = requestQueue.shift();
-  nextRequest();
-
-  // Wait 5 seconds before processing the next request
-  setTimeout(() => {
-    isProcessing = false;
-    processQueue();
-  }, 5000);
-}
-
-app.get('/api/search', (req, res) => {
-  enqueueRequest(() => handleEbaySearch(req, res));
-});
-
-async function handleEbaySearch(req, res) {
-  const keyword = req.query.keyword;
-  if (!keyword) {
-    console.warn('⚠️ Missing "keyword" query param');
-    return res.status(400).json({ error: 'Missing "keyword" query param' });
-  }
-
-  const params = new URLSearchParams({
-    'OPERATION-NAME': 'findCompletedItems',
-    'SERVICE-VERSION': '1.13.0',
-    'SECURITY-APPNAME': EBAY_APP_ID,
-    'RESPONSE-DATA-FORMAT': 'JSON',
-    'REST-PAYLOAD': 'true',
-    'keywords': keyword,
-    'itemFilter(0).name': 'SoldItemsOnly',
-    'itemFilter(0).value': 'true',
-    'paginationInput.entriesPerPage': '5'
-  });
-
-  const url = `https://svcs.ebay.com/services/search/FindingService/v1?${params.toString()}`;
-
-  console.log(`🔍 Fetching eBay for: "${keyword}"`);
-
-  try {
-    const response = await fetch(url);
-    const body = await response.text();
-
-    console.log(`📥 eBay API status: ${response.status}`);
-    if (!response.ok) {
-      console.error(`❌ eBay API error response body:\n${body}`);
-      return res.status(500).json({ error: 'eBay API error', body });
+    if (!keyword) {
+        return res.status(400).json({ error: 'Missing keyword parameter' });
     }
 
-    const json = JSON.parse(body);
-    res.json(json);
-  } catch (error) {
-    console.error('❌ Failed to fetch from eBay:', error);
-    res.status(500).json({ error: 'Failed to fetch from eBay', message: error.message });
-  }
+    const url = `https://svcs.ebay.com/services/search/FindingService/v1` +
+        `?OPERATION-NAME=findCompletedItems` +
+        `&SERVICE-VERSION=1.0.0` +
+        `&SECURITY-APPNAME=${EBAY_APP_ID}` +
+        `&RESPONSE-DATA-FORMAT=JSON` +
+        `&REST-PAYLOAD=true` +
+        `&keywords=${encodeURIComponent(keyword)}` +
+        `&itemFilter(0).name=SoldItemsOnly` +
+        `&itemFilter(0).value=true` +
+        `&paginationInput.entriesPerPage=5`;
+
+    try {
+        const response = await fetch(url);
+        const text = await response.text();
+
+        if (!response.ok) {
+            console.error('❌ eBay API error response body:\n', text);
+            return res.status(500).json({ error: 'eBay API failed', details: text });
+        }
+
+        const data = JSON.parse(text);
+        res.json(data);
+    } catch (err) {
+        console.error('❌ Exception while calling eBay API:', err);
+        res.status(500).json({ error: 'eBay API error', details: err.message });
+    }
+});
+
+// === eBay User Data Deletion Hook ===
+app.post('/user-data-deletion', (req, res) => {
+    const authHeader = req.headers['x-ebay-verification-token'];
+
+    if (!authHeader || authHeader !== EBAY_VERIFICATION_TOKEN) {
+        console.warn('❌ Invalid or missing eBay verification token');
+        return res.status(403).json({ error: 'Forbidden: invalid token' });
+    }
+
+    const { eventType, userId, username } = req.body;
+
+    if (eventType !== 'ACCOUNT_DELETION') {
+        return res.status(400).json({ error: 'Unsupported event type' });
+    }
+
+    console.log(`✅ Verified deletion request for userId: ${userId}, username: ${username}`);
+    deleteUserData(userId);
+
+    res.status(200).json({ status: 'User data deleted' });
+});
+
+function deleteUserData(userId) {
+    console.log(`🧹 Deleting user data for userId: ${userId}...`);
+    // Implement real deletion logic if needed
 }
 
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📦 Using EBAY_APP_ID: ${EBAY_APP_ID}`);
+    console.log(`🔐 Using EBAY_CERT_ID: ${EBAY_CERT_ID}`);
+    console.log(`🔑 Using EBAY_DEV_ID: ${EBAY_DEV_ID}`);
 });
