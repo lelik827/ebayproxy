@@ -2,14 +2,14 @@ import fetch from 'node-fetch';
 import express from 'express';
 import cors from 'cors';
 
-
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 const EBAY_APP_ID = process.env.EBAY_APP_ID;
 
 app.use(cors());
+app.use(express.json()); // Allows parsing of JSON bodies in POST requests
 
+// === eBay Card Search Proxy ===
 app.get('/api/search', async (req, res) => {
     const { keyword } = req.query;
     if (!keyword) {
@@ -27,5 +27,28 @@ app.get('/api/search', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+// === eBay Account Deletion Notification ===
+app.post('/user-data-deletion', (req, res) => {
+    const { eventType, userId, username } = req.body;
 
+    if (eventType !== 'ACCOUNT_DELETION') {
+        return res.status(400).json({ error: 'Unsupported event type' });
+    }
+
+    console.log(`🗑️ Received deletion request for userId: ${userId}, username: ${username}`);
+
+    // TODO: Replace this with actual logic to delete or anonymize user data
+    deleteUserData(userId);
+
+    res.status(200).json({ status: 'User data deleted' });
+});
+
+// === Dummy function to simulate deletion ===
+function deleteUserData(userId) {
+    console.log(`🚨 Deleting user data for userId: ${userId}...`);
+    // Implement your data deletion logic here (e.g., database cleanup)
+}
+
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
