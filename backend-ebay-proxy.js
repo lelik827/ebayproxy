@@ -1,12 +1,14 @@
+import fetch from 'node-fetch';
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
 
-const express = require('express');
-const fetch = require('node-fetch');
-const cors = require('cors');
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const EBAY_APP_ID = process.env.EBAY_APP_ID || 'AlekseyC-CardPric-SBX-2810ac181-68c79a28';
+const EBAY_APP_ID = process.env.EBAY_APP_ID;
 
 app.use(cors());
 
@@ -16,7 +18,7 @@ app.get('/api/search', async (req, res) => {
         return res.status(400).json({ error: 'Missing keyword parameter' });
     }
 
-    const url = \`https://svcs.sandbox.ebay.com/services/search/FindingService/v1?OPERATION-NAME=findCompletedItems&SERVICE-VERSION=1.0.0&SECURITY-APPNAME=\${EBAY_APP_ID}&RESPONSE-DATA-FORMAT=JSON&REST-PAYLOAD&keywords=\${encodeURIComponent(keyword)}&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true&paginationInput.entriesPerPage=5\`;
+    const url = `https://svcs.sandbox.ebay.com/services/search/FindingService/v1?OPERATION-NAME=findCompletedItems&SERVICE-VERSION=1.0.0&SECURITY-APPNAME=${EBAY_APP_ID}&RESPONSE-DATA-FORMAT=JSON&REST-PAYLOAD&keywords=${encodeURIComponent(keyword)}&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true&paginationInput.entriesPerPage=5`;
 
     try {
         const response = await fetch(url);
@@ -27,4 +29,5 @@ app.get('/api/search', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(\`Server running on http://localhost:\${PORT}\`));
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+
