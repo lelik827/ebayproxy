@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-import querystring from 'querystring';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -16,78 +15,24 @@ const PORT = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const {
-  EBAY_CLIENT_ID,
-  EBAY_CLIENT_SECRET,
-  EBAY_REDIRECT_URI,
-} = process.env;
+const { EBAY_CLIENT_ID } = process.env;
 
+// Enable trust proxy for Render's environment
+app.set('trust proxy', 1); // Trust the first proxy (Render's load balancer)
+
+// Middleware
 app.use(cors());
 app.use(express.json());
-
-// Serve static frontend files from 'public' folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Rate limiting middleware (1 request per 5 seconds)
 const searchLimiter = rateLimit({
-  windowMs: 5000,
-  max: 1,
+  windowMs: 5000, // 5 seconds
+  max: 1, // 1 request per window
   message: 'Too many requests, please wait 5 seconds',
 });
 
-// OAuth routes (same as before)
-app.get('/auth/login', (req, res) => {
-  const scope = 'https://api.ebay.com/oauth/api_scope';
-  const query = querystring.stringify({
-    client_id: EBAY_CLIENT_ID,
-    response_type: 'code',
-    redirect_uri: EBAY_REDIRECT_URI,
-    scope,
-  });
-  const ebayAuthUrl = `https://auth.ebay.com/oauth2/authorize?${query}`;
-  res.redirect(ebayAuthUrl);
-});
-
-app.get('/auth/callback', async (req, res) => {
-  const { code } = req.query;
-  if (!code) {
-    return res.status(400).send('Missing auth code');
-  }
-
-  const tokenUrl = 'https://api.ebay.com/identity/v1/oauth2/token';
-  const basicAuth = Buffer.from(`${EBAY_CLIENT_ID}:${EBAY_CLIENT_SECRET}`).toString('base64');
-  const tokenParams = querystring.stringify({
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: EBAY_REDIRECT_URI,
-  });
-
-  try {
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basicAuth}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: tokenParams,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ Token exchange failed:', errorText);
-      return res.status(500).send(`Token exchange failed:\n${errorText}`);
-    }
-
-    const tokenData = await response.json();
-    console.log('🔑 Access Token:', tokenData.access_token);
-    res.send('✅ eBay OAuth completed successfully! You can close this window.');
-  } catch (err) {
-    console.error('❌ OAuth error:', err);
-    res.status(500).send('Internal Server Error');
-  }
-});
-
-// eBay search API proxy
+// eBay search API proxy with retry logic
 app.get('/api/search', searchLimiter, async (req, res) => {
   const { keyword } = req.query;
   if (!keyword) {
@@ -105,18 +50,38 @@ app.get('/api/search', searchLimiter, async (req, res) => {
     `&itemFilter(0).value=true` +
     `&paginationInput.entriesPerPage=5`;
 
-  try {
-    const response = await fetch(searchUrl);
-    const data = await response.json();
+  // Retry logic for rate limit errors
+  const maxRetries = 3;
+  let attempt = 1;
 
-    if (data.errorMessage) {
-      console.error('❌ eBay API error:', JSON.stringify(data, null, 2));
+  while (attempt <= maxRetries) {
+    try {
+      const response = await fetch(searchUrl);
+      const data = await response.json();
+
+      if (data.errorMessage) {
+        const error = data.errorMessage[0].error[0];
+        console.error(`❌ eBay API error (attempt ${attempt}):`, JSON.stringify(error, null, 2));
+        if (error.errorId[0] === '10001' && attempt < maxRetries) {
+          // Rate limit error, wait and retry
+          const delay = Math.pow(2, attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
+          console.log(`Rate limit hit, retrying after ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          attempt++;
+          continue;
+        }
+        return res.status(500).json({ error: 'eBay API error', details: error.message[0] });
+      }
+
+      res.json(data);
+      return;
+    } catch (err) {
+      console.error(`❌ Search error (attempt ${attempt}):`, err);
+      if (attempt === maxRetries) {
+        res.status(500).json({ error: 'eBay API error', details: err.message });
+      }
+      attempt++;
     }
-
-    res.json(data);
-  } catch (err) {
-    console.error('❌ Search error:', err);
-    res.status(500).json({ error: 'eBay API error', details: err.message });
   }
 });
 
