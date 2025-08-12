@@ -24,7 +24,8 @@ const {
 } = process.env;
 
 // Trust proxies (fixes X-Forwarded-For validation error on Render)
-app.set('trust proxy', true);
+// Set to 1 to trust the first proxy hop, avoiding the permissive 'true' setting
+app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(express.json());
