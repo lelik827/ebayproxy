@@ -6,7 +6,7 @@ import querystring from 'querystring';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { Buffer } from 'buffer'; // Added for OAuth token handling
+import { Buffer } from 'buffer';
 
 dotenv.config();
 
@@ -23,14 +23,13 @@ const {
   EBAY_REDIRECT_URI,
 } = process.env;
 
-// Trust proxies (fixes X-Forwarded-For validation error on Render)
-// Set to 1 to trust the first proxy hop, avoiding the permissive 'true' setting
+// Trust proxies (set to 1 for Render, avoids permissive warning)
 app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(express.json());
 
-// Serve static frontend files from 'public' folder
+// Serve static frontend files from 'public' folder (optional, if needed)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Rate limiting middleware (1 request per 5 seconds)
@@ -40,7 +39,7 @@ const searchLimiter = rateLimit({
   message: 'Too many requests, please wait 5 seconds',
 });
 
-// OAuth routes (same as before, but keeping in case you need them later)
+// OAuth routes (for user token if needed)
 app.get('/auth/login', (req, res) => {
   const scope = 'https://api.ebay.com/oauth/api_scope';
   const query = querystring.stringify({
@@ -131,9 +130,10 @@ app.get('/api/search', searchLimiter, async (req, res) => {
   }
 });
 
-// New route to check rate limits
+// Rate limit check endpoint (returns remaining calls for Finding API if available)
 app.get('/api/check-limits', async (req, res) => {
   if (!EBAY_CLIENT_ID || !EBAY_CLIENT_SECRET) {
+    console.error('❌ Missing eBay credentials');
     return res.status(500).json({ error: 'Missing eBay credentials' });
   }
 
@@ -155,12 +155,15 @@ app.get('/api/check-limits', async (req, res) => {
       body: tokenParams,
     });
 
+    const tokenBody = await tokenResponse.text();
+    console.log(`Token response status: ${tokenResponse.status}, body: ${tokenBody}`);
+
     if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      return res.status(500).json({ error: `Token fetch failed: ${errorText}` });
+      return res.status(500).json({ error: `Token fetch failed (status ${tokenResponse.status}): ${tokenBody}` });
     }
 
-    const { access_token } = await tokenResponse.json();
+    const { access_token } = JSON.parse(tokenBody);
+    console.log('✅ Access token obtained');
 
     // Fetch rate limits
     const limitsUrl = 'https://api.ebay.com/developer/analytics/v1/rate_limit';
@@ -170,16 +173,31 @@ app.get('/api/check-limits', async (req, res) => {
       },
     });
 
+    const limitsBody = await limitsResponse.text();
+    console.log(`Limits response status: ${limitsResponse.status}, body: ${limitsBody}`);
+
     if (!limitsResponse.ok) {
-      const errorText = await limitsResponse.text();
-      return res.status(500).json({ error: `Limits fetch failed: ${errorText}` });
+      return res.status(500).json({ error: `Limits fetch failed (status ${limitsResponse.status}): ${limitsBody}` });
     }
 
-    const limitsData = await limitsResponse.json();
-    res.json(limitsData);
+    const limitsData = JSON.parse(limitsBody);
+    
+    // Extract remaining for Finding API (findCompletedItems) if available
+    let remaining = 'Unknown';
+    if (limitsData.resources && limitsData.resources.length > 0) {
+      const findingResource = limitsData.resources.find(r => r.name === 'findCompletedItems');
+      if (findingResource) {
+        remaining = findingResource.remaining || 'Unknown';
+      }
+    }
+
+    res.json({
+      fullData: limitsData,
+      remainingFindingCalls: remaining
+    });
   } catch (err) {
-    console.error('❌ Limits check error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('❌ Limits check error:', err.stack);
+    res.status(500).json({ error: `Unexpected error: ${err.message}` });
   }
 });
 
