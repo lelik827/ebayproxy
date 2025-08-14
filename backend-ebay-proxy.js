@@ -1,3 +1,4 @@
+```javascript
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
@@ -165,8 +166,8 @@ app.get('/api/check-limits', async (req, res) => {
     const { access_token } = JSON.parse(tokenBody);
     console.log('✅ Access token obtained');
 
-    // Fetch rate limits
-    const limitsUrl = 'https://api.ebay.com/developer/analytics/v1/rate_limit';
+    // Fetch rate limits (use v1_beta as per eBay docs)
+    const limitsUrl = 'https://api.ebay.com/developer/analytics/v1_beta/rate_limit';
     const limitsResponse = await fetch(limitsUrl, {
       headers: {
         Authorization: `Bearer ${access_token}`,
@@ -184,10 +185,10 @@ app.get('/api/check-limits', async (req, res) => {
     
     // Extract remaining for Finding API (findCompletedItems) if available
     let remaining = 'Unknown';
-    if (limitsData.resources && limitsData.resources.length > 0) {
-      const findingResource = limitsData.resources.find(r => r.name === 'findCompletedItems');
-      if (findingResource) {
-        remaining = findingResource.remaining || 'Unknown';
+    if (limitsData.rateLimits && limitsData.rateLimits.length > 0) {
+      const findingLimit = limitsData.rateLimits.find(limit => limit.apiName === 'findCompletedItems');
+      if (findingLimit && findingLimit.resources && findingLimit.resources.length > 0) {
+        remaining = findingLimit.resources[0].rates[0].remaining || 'Unknown';
       }
     }
 
@@ -204,3 +205,4 @@ app.get('/api/check-limits', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
+```
